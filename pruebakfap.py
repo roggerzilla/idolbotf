@@ -1,5 +1,5 @@
 import telegram
-import cloudscraper # CAMBIO IMPORTANTE
+from curl_cffi import requests # ESTA ES LA NUEVA LIBRERÍA POTENTE
 from bs4 import BeautifulSoup
 import random
 import asyncio
@@ -16,16 +16,12 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', TOKEN_RESPALDO)
 
 BASE_URL = "https://idolfap.com"
 
-# CREAMOS EL SCRAPER QUE SE SALTA PROTECCIONES
-# Esto simula ser un navegador Chrome real para engañar a la página
-scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
-
 # --- 1. SERVIDOR WEB (KEEP ALIVE) ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "El bot está vivo y corriendo."
+    return "El bot está vivo."
 
 def run():
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
@@ -34,16 +30,29 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
+# --- HELPER: PETICIÓN SEGURA ---
+def hacer_peticion_segura(url):
+    """
+    Usa curl_cffi para imitar un navegador Chrome real a nivel TLS.
+    Esto es lo que evita el error 403.
+    """
+    # impersonate="chrome110" imita exactamente las firmas digitales de Chrome
+    return requests.get(url, impersonate="chrome110", timeout=15)
+
 # --- 2. FUNCIÓN DE SCRAPING: Obtener enlace ---
 def obtener_enlace_aleatorio(idolo_nombre: str) -> Optional[str]:
     url_idolo = f"{BASE_URL}/idols/{idolo_nombre.lower()}/"
-    print(f"Rascando la URL de publicaciones: {url_idolo}", flush=True) # flush=True fuerza que salga en el log
+    print(f"Rascando URL: {url_idolo}", flush=True)
 
     try:
-        # USAMOS SCRAPER EN LUGAR DE REQUESTS
-        response = scraper.get(url_idolo, timeout=15)
+        # Usamos la función segura
+        response = hacer_peticion_segura(url_idolo)
         
-        # Si nos da error 403 o 503, lanzará excepción
+        # Si sigue dando 403, esto lanzará el error para verlo en el log
+        if response.status_code == 403:
+            print("CRÍTICO: Error 403. Cloudflare sigue bloqueando la IP de Render.", flush=True)
+            return None
+            
         response.raise_for_status()
         
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -55,22 +64,21 @@ def obtener_enlace_aleatorio(idolo_nombre: str) -> Optional[str]:
                 post_links.append(a_tag['href'])
 
         if not post_links:
-            print(f"DEBUG: HTML recibido pero no hay posts. Título de página: {soup.title.string if soup.title else 'Sin título'}", flush=True)
+            print(f"No se encontraron posts. Status: {response.status_code}", flush=True)
             return None
 
         enlace_relativo_aleatorio = random.choice(post_links)
         return BASE_URL + enlace_relativo_aleatorio
 
     except Exception as e:
-        print(f"Error al rascar la página del ídolo ({url_idolo}): {e}", flush=True)
+        print(f"Error general buscando ídolo: {e}", flush=True)
         return None
 
 # --- 3. FUNCIÓN DE SCRAPING: Obtener archivo ---
 def obtener_url_archivo(url_publicacion: str) -> str | None:
-    print(f"Rascando archivo en: {url_publicacion}", flush=True)
+    print(f"Buscando multimedia en: {url_publicacion}", flush=True)
     try:
-        # USAMOS SCRAPER
-        response = scraper.get(url_publicacion, timeout=15)
+        response = hacer_peticion_segura(url_publicacion)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -80,7 +88,6 @@ def obtener_url_archivo(url_publicacion: str) -> str | None:
             if src and ".mp4" in src:
                 if src.startswith("//"): src = "https:" + src
                 elif src.startswith("/"): src = BASE_URL + src
-                print(f"Encontrado MP4: {src}", flush=True)
                 return src
 
         # 2) Poster
@@ -89,7 +96,6 @@ def obtener_url_archivo(url_publicacion: str) -> str | None:
             if poster and "/files/" in poster:
                 if poster.startswith("//"): poster = "https:" + poster
                 elif poster.startswith("/"): poster = BASE_URL + poster
-                print(f"Encontrado Poster: {poster}", flush=True)
                 return poster
 
         # 3) Imágenes
@@ -98,13 +104,11 @@ def obtener_url_archivo(url_publicacion: str) -> str | None:
             if src and "/files/" in src:
                 if src.startswith("//"): src = "https:" + src
                 elif src.startswith("/"): src = BASE_URL + src
-                print(f"Encontrada IMG: {src}", flush=True)
                 return src
         
-        print("DEBUG: No se encontraron multimedia en el post.", flush=True)
         return None
     except Exception as e:
-        print(f"Error obteniendo archivo: {e}", flush=True)
+        print(f"Error buscando archivo: {e}", flush=True)
         return None
 
 # --- 4. COMANDO ---
@@ -114,16 +118,16 @@ async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     idolo_nombre = context.args[0]
-    await update.message.reply_text(f"Buscando a **{idolo_nombre.capitalize()}**...", parse_mode=telegram.constants.ParseMode.MARKDOWN)
+    # Mensaje inicial
+    msg = await update.message.reply_text(f"🔍 Buscando a **{idolo_nombre.capitalize()}**...", parse_mode=telegram.constants.ParseMode.MARKDOWN)
 
     url_archivo = None
     url_publicacion = None
-    MAX_ATTEMPTS = 5
+    MAX_ATTEMPTS = 4 # Bajamos intentos para no saturar
     
     for attempt in range(MAX_ATTEMPTS):
         url_publicacion = await asyncio.to_thread(obtener_enlace_aleatorio, idolo_nombre)
         if not url_publicacion:
-            # Si falla el primer paso, esperamos un poco más
             await asyncio.sleep(2)
             continue
             
@@ -133,14 +137,16 @@ async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await asyncio.sleep(1)
         
     if not url_archivo:
-        await update.message.reply_text("❌ Render fue bloqueado o no encontró contenido. Revisa los logs.")
+        await msg.edit_text("❌ No se pudo descargar nada. La página está bloqueando los servidores de Render (Error 403).")
         return
 
     try:
-        # Descargamos también con scraper
-        file_content_response = await asyncio.to_thread(scraper.get, url_archivo, timeout=30)
-        file_content_response.raise_for_status()
-        file_bytes = file_content_response.content
+        # Descarga final usando también curl_cffi para evitar bloqueo en la imagen
+        await msg.edit_text("⬇️ Descargando y enviando...")
+        
+        file_response = await asyncio.to_thread(hacer_peticion_segura, url_archivo)
+        file_response.raise_for_status()
+        file_bytes = file_response.content
         
         file_extension = url_archivo.lower().split('.')[-1]
         filename = f'{idolo_nombre}.{file_extension}'
@@ -150,10 +156,10 @@ async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif file_extension in ('webp', 'gif', 'mp4', 'webm'):
             await update.message.reply_document(document=InputFile(file_bytes, filename=filename), caption=f"Fuente: {url_publicacion}")
         else:
-             await update.message.reply_text("Formato no compatible.")
+             await msg.edit_text("Formato desconocido.")
 
     except Exception as e:
-        await update.message.reply_text(f"Error al enviar: {e}")
+        await msg.edit_text(f"Error al enviar: {e}")
 
 # --- 5. INICIO ---
 def main() -> None:
@@ -164,7 +170,7 @@ def main() -> None:
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("imagen", imagen_command))
     
-    print("Bot iniciado con CloudScraper.", flush=True)
+    print("Bot iniciado con CURL_CFFI (Anti-Bloqueo).", flush=True)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
