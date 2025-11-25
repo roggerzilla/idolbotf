@@ -1,6 +1,5 @@
 python-telegram-bot
-requests
+curl_cffi
 beautifulsoup4
 flask
 asyncio
-cloudscraper
