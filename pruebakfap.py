@@ -111,7 +111,29 @@ def obtener_url_archivo(url_publicacion: str) -> str | None:
         print(f"Error buscando archivo: {e}", flush=True)
         return None
 
-# --- 4. COMANDO ---
+# --- 4a. FUNCIÓN DEL BOT: Manejar el comando /monkeyfap_ayuda ---
+async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Muestra la lista de comandos disponibles y cómo usarlos."""
+    texto_ayuda = (
+        "🐵 *MonkeyFap - Ayuda*\n\n"
+        "Estos son los comandos disponibles:\n\n"
+        "📷 */imagen <nombre>*\n"
+        "Busca y envía contenido aleatorio del ídolo indicado.\n"
+        "_Ejemplo:_ `/imagen mbnu`\n\n"
+        "👥 */grupo <nombre>*\n"
+        "Busca y envía contenido aleatorio de un grupo.\n"
+        "_Ejemplo:_ `/grupo aespa`\n\n"
+        "❓ */monkeyfap_ayuda*\n"
+        "Muestra este mensaje de ayuda.\n\n"
+        "ℹ️ Escribe el nombre en una sola palabra, sin espacios."
+    )
+    await update.message.reply_text(
+        texto_ayuda,
+        parse_mode=telegram.constants.ParseMode.MARKDOWN,
+    )
+
+
+# --- 4. FUNCIÓN DEL BOT: Manejar el comando /imagen ---
 async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text("Usa: /imagen <nombre>")
@@ -169,8 +191,10 @@ def main() -> None:
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("imagen", imagen_command))
-    
-    print("Bot iniciado con CURL_CFFI (Anti-Bloqueo).", flush=True)
+    application.add_handler(CommandHandler("grupo", imagen_command))
+    application.add_handler(CommandHandler("monkeyfap_ayuda", ayuda_command))
+
+    print("Bot iniciado con CURL_CFFI (Anti-Bloqueo). Comandos: /imagen, /grupo, /monkeyfap_ayuda", flush=True)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
