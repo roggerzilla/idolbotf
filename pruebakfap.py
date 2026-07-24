@@ -76,42 +76,55 @@ def obtener_enlace_aleatorio(nombre: str, seccion: str = "idols") -> Optional[st
         print(f"Error general buscando ídolo: {e}", flush=True)
         return None
 
-# --- 3. FUNCIÓN DE SCRAPING: Obtener archivo ---
-def obtener_url_archivo(url_publicacion: str) -> str | None:
+def _normalizar_url(u: str) -> str:
+    if u.startswith("//"):
+        return "https:" + u
+    if u.startswith("/"):
+        return BASE_URL + u
+    return u
+
+# --- 3. FUNCIÓN DE SCRAPING: Obtener TODOS los archivos (soporta carruseles) ---
+def obtener_urls_archivos(url_publicacion: str) -> list:
+    """Devuelve TODAS las URLs de multimedia de un post, en orden y sin duplicados."""
     print(f"Buscando multimedia en: {url_publicacion}", flush=True)
+    urls = []
+
+    def _add(u):
+        if u and u not in urls:
+            urls.append(u)
+
     try:
         response = hacer_peticion_segura(url_publicacion)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 1) Video MP4
+        # 1) Videos MP4
         for source in soup.find_all("source"):
             src = source.get("src")
             if src and ".mp4" in src:
-                if src.startswith("//"): src = "https:" + src
-                elif src.startswith("/"): src = BASE_URL + src
-                return src
+                _add(_normalizar_url(src))
 
-        # 2) Poster
+        # 2) Posters de video
         for video in soup.find_all("video"):
             poster = video.get("data-poster") or video.get("poster")
             if poster and "/files/" in poster:
-                if poster.startswith("//"): poster = "https:" + poster
-                elif poster.startswith("/"): poster = BASE_URL + poster
-                return poster
+                _add(_normalizar_url(poster))
 
         # 3) Imágenes
         for img in soup.find_all("img"):
             src = img.get("data-src") or img.get("src")
             if src and "/files/" in src:
-                if src.startswith("//"): src = "https:" + src
-                elif src.startswith("/"): src = BASE_URL + src
-                return src
-        
-        return None
+                _add(_normalizar_url(src))
+
+        return urls
     except Exception as e:
-        print(f"Error buscando archivo: {e}", flush=True)
-        return None
+        print(f"Error buscando archivos: {e}", flush=True)
+        return urls
+
+# Compatibilidad: devuelve solo el primer archivo (flujo aleatorio normal).
+def obtener_url_archivo(url_publicacion: str) -> str | None:
+    urls = obtener_urls_archivos(url_publicacion)
+    return urls[0] if urls else None
 
 # --- 4a. FUNCIÓN DEL BOT: Manejar el comando /monkeyfap_ayuda ---
 async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -129,6 +142,8 @@ async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Busca y envía contenido aleatorio de un creador.\n"
         "_Ejemplo:_ `/creador Izland`\n"
         "⚠️ El nombre del creador respeta MAYÚSCULAS/minúsculas.\n\n"
+        "🧪 */imagen prueba*\n"
+        "Prueba un post fijo con carrusel (envía todos sus archivos).\n\n"
         "❓ */monkeyfap_ayuda*\n"
         "Muestra este mensaje de ayuda.\n\n"
         "ℹ️ Escribe el nombre en una sola palabra, sin espacios."
@@ -137,6 +152,25 @@ async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         texto_ayuda,
         parse_mode=telegram.constants.ParseMode.MARKDOWN,
     )
+
+
+# --- HELPER: enviar un archivo multimedia a Telegram según su extensión ---
+async def enviar_media(update: Update, url_archivo: str, nombre_base: str, caption: str) -> bool:
+    """Descarga y envía un archivo. Devuelve True si se envió."""
+    file_response = await asyncio.to_thread(hacer_peticion_segura, url_archivo)
+    file_response.raise_for_status()
+    file_bytes = file_response.content
+
+    file_extension = url_archivo.lower().split('.')[-1]
+    filename = f'{nombre_base}.{file_extension}'
+
+    if file_extension in ('jpg', 'jpeg', 'png'):
+        await update.message.reply_photo(photo=InputFile(file_bytes, filename=filename), caption=caption)
+        return True
+    elif file_extension in ('webp', 'gif', 'mp4', 'webm'):
+        await update.message.reply_document(document=InputFile(file_bytes, filename=filename), caption=caption)
+        return True
+    return False
 
 
 # --- 4. FUNCIÓN NÚCLEO: buscar y enviar (usada por /imagen, /grupo y /creador) ---
@@ -171,27 +205,47 @@ async def buscar_y_enviar(update: Update, context: ContextTypes.DEFAULT_TYPE, se
     try:
         # Descarga final usando también curl_cffi para evitar bloqueo en la imagen
         await msg.edit_text("⬇️ Descargando y enviando...")
-        
-        file_response = await asyncio.to_thread(hacer_peticion_segura, url_archivo)
-        file_response.raise_for_status()
-        file_bytes = file_response.content
-        
-        file_extension = url_archivo.lower().split('.')[-1]
-        filename = f'{idolo_nombre}.{file_extension}'
-
-        if file_extension in ('jpg', 'jpeg', 'png'):
-            await update.message.reply_photo(photo=InputFile(file_bytes, filename=filename), caption=f"Fuente: {url_publicacion}")
-        elif file_extension in ('webp', 'gif', 'mp4', 'webm'):
-            await update.message.reply_document(document=InputFile(file_bytes, filename=filename), caption=f"Fuente: {url_publicacion}")
-        else:
-             await msg.edit_text("Formato desconocido.")
+        enviado = await enviar_media(update, url_archivo, idolo_nombre, caption=f"Fuente: {url_publicacion}")
+        if not enviado:
+            await msg.edit_text("Formato desconocido.")
 
     except Exception as e:
         await msg.edit_text(f"Error al enviar: {e}")
 
 
-# --- 4b. COMANDOS: cada uno usa su sección del sitio ---
+# --- 4b. PRUEBA HARDCODEADA: /imagen prueba (post con carrusel) ---
+POST_PRUEBA = "https://idolfap.com/post/151586/"
+
+async def prueba_carrusel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Extrae y envía TODOS los archivos del post de prueba (soporte carrusel)."""
+    msg = await update.message.reply_text("🧪 Probando post hardcodeado (carrusel)...")
+
+    urls = await asyncio.to_thread(obtener_urls_archivos, POST_PRUEBA)
+    if not urls:
+        await msg.edit_text("❌ No se encontró multimedia en el post de prueba (¿403 de Cloudflare?).")
+        return
+
+    await msg.edit_text(f"✅ Encontré {len(urls)} archivo(s). Enviando...")
+    enviados = 0
+    for i, u in enumerate(urls, 1):
+        try:
+            if await enviar_media(update, u, f"prueba_{i}", caption=f"[{i}/{len(urls)}] {POST_PRUEBA}"):
+                enviados += 1
+        except Exception as e:
+            print(f"Error enviando {u}: {e}", flush=True)
+
+    if enviados == 0:
+        await msg.edit_text("❌ Se encontraron URLs pero no se pudieron enviar.")
+    else:
+        await msg.edit_text(f"✅ Enviados {enviados}/{len(urls)} archivo(s) del carrusel.")
+
+
+# --- 4c. COMANDOS: cada uno usa su sección del sitio ---
 async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Caso especial de prueba: /imagen prueba -> post hardcodeado con carrusel
+    if context.args and context.args[0].lower() == "prueba":
+        await prueba_carrusel(update, context)
+        return
     await buscar_y_enviar(update, context, seccion="idols")
 
 async def grupo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
