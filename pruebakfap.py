@@ -90,7 +90,9 @@ def obtener_urls_archivos(url_publicacion: str) -> list:
     urls = []
 
     def _add(u):
-        if u and u not in urls:
+        # Descartar miniaturas/previews: los reales van en /files/src/,
+        # las previews en /files/thumb/.
+        if u and "/files/thumb/" not in u and u not in urls:
             urls.append(u)
 
     try:
