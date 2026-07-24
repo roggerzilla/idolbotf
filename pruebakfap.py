@@ -40,8 +40,10 @@ def hacer_peticion_segura(url):
     return requests.get(url, impersonate="chrome110", timeout=15)
 
 # --- 2. FUNCIÓN DE SCRAPING: Obtener enlace ---
-def obtener_enlace_aleatorio(idolo_nombre: str) -> Optional[str]:
-    url_idolo = f"{BASE_URL}/idols/{idolo_nombre.lower()}/"
+def obtener_enlace_aleatorio(nombre: str, seccion: str = "idols") -> Optional[str]:
+    # Los ídolos/grupos van en minúscula; los creadores respetan mayúsculas.
+    nombre_url = nombre if seccion == "creator" else nombre.lower()
+    url_idolo = f"{BASE_URL}/{seccion}/{nombre_url}/"
     print(f"Rascando URL: {url_idolo}", flush=True)
 
     try:
@@ -123,6 +125,10 @@ async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "👥 */grupo <nombre>*\n"
         "Busca y envía contenido aleatorio de un grupo.\n"
         "_Ejemplo:_ `/grupo aespa`\n\n"
+        "🎨 */creador <nombre>*\n"
+        "Busca y envía contenido aleatorio de un creador.\n"
+        "_Ejemplo:_ `/creador Izland`\n"
+        "⚠️ El nombre del creador respeta MAYÚSCULAS/minúsculas.\n\n"
         "❓ */monkeyfap_ayuda*\n"
         "Muestra este mensaje de ayuda.\n\n"
         "ℹ️ Escribe el nombre en una sola palabra, sin espacios."
@@ -133,10 +139,10 @@ async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-# --- 4. FUNCIÓN DEL BOT: Manejar el comando /imagen ---
-async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# --- 4. FUNCIÓN NÚCLEO: buscar y enviar (usada por /imagen, /grupo y /creador) ---
+async def buscar_y_enviar(update: Update, context: ContextTypes.DEFAULT_TYPE, seccion: str = "idols") -> None:
     if not context.args:
-        await update.message.reply_text("Usa: /imagen <nombre>")
+        await update.message.reply_text("Usa: /imagen <nombre>, /grupo <nombre> o /creador <nombre>")
         return
 
     idolo_nombre = context.args[0]
@@ -146,9 +152,9 @@ async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     url_archivo = None
     url_publicacion = None
     MAX_ATTEMPTS = 4 # Bajamos intentos para no saturar
-    
+
     for attempt in range(MAX_ATTEMPTS):
-        url_publicacion = await asyncio.to_thread(obtener_enlace_aleatorio, idolo_nombre)
+        url_publicacion = await asyncio.to_thread(obtener_enlace_aleatorio, idolo_nombre, seccion)
         if not url_publicacion:
             await asyncio.sleep(2)
             continue
@@ -183,6 +189,17 @@ async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         await msg.edit_text(f"Error al enviar: {e}")
 
+
+# --- 4b. COMANDOS: cada uno usa su sección del sitio ---
+async def imagen_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await buscar_y_enviar(update, context, seccion="idols")
+
+async def grupo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await buscar_y_enviar(update, context, seccion="idols")
+
+async def creador_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await buscar_y_enviar(update, context, seccion="creator")
+
 # --- 5. INICIO ---
 def main() -> None:
     if not TELEGRAM_TOKEN:
@@ -191,10 +208,11 @@ def main() -> None:
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("imagen", imagen_command))
-    application.add_handler(CommandHandler("grupo", imagen_command))
+    application.add_handler(CommandHandler("grupo", grupo_command))
+    application.add_handler(CommandHandler("creador", creador_command))
     application.add_handler(CommandHandler("monkeyfap_ayuda", ayuda_command))
 
-    print("Bot iniciado con CURL_CFFI (Anti-Bloqueo). Comandos: /imagen, /grupo, /monkeyfap_ayuda", flush=True)
+    print("Bot iniciado con CURL_CFFI (Anti-Bloqueo). Comandos: /imagen, /grupo, /creador, /monkeyfap_ayuda", flush=True)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
