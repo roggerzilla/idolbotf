@@ -226,10 +226,15 @@ async def prueba_carrusel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await msg.edit_text(f"✅ Encontré {len(urls)} archivo(s). Enviando...")
+
+    # DEBUG: mostrar la lista de URLs detectadas para depurar duplicados/previews
+    listado = "\n".join(f"{i}. {u}" for i, u in enumerate(urls, 1))
+    await update.message.reply_text(f"🔎 URLs detectadas:\n{listado}"[:4000])
+
     enviados = 0
     for i, u in enumerate(urls, 1):
         try:
-            if await enviar_media(update, u, f"prueba_{i}", caption=f"[{i}/{len(urls)}] {POST_PRUEBA}"):
+            if await enviar_media(update, u, f"prueba_{i}", caption=f"[{i}/{len(urls)}] {u}"):
                 enviados += 1
         except Exception as e:
             print(f"Error enviando {u}: {e}", flush=True)
