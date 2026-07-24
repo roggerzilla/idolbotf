@@ -206,7 +206,14 @@ def main() -> None:
         print("ERROR: No hay token.", flush=True)
         return
 
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    # concurrent_updates(True) permite procesar varias peticiones a la vez
+    # (cada update se maneja como una tarea independiente, no en serie).
+    application = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .concurrent_updates(True)
+        .build()
+    )
     application.add_handler(CommandHandler("imagen", imagen_command))
     application.add_handler(CommandHandler("grupo", grupo_command))
     application.add_handler(CommandHandler("creador", creador_command))
